@@ -81,6 +81,34 @@ export default function Sidebar() {
           </NavLink>
 
           <NavLink
+            to="/productos"
+            className={({ isActive }) =>
+              `flex items-center rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                isActive
+                  ? "bg-blue-50 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+                  : "text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+              }`
+            }
+            onClick={() => setIsOpen(false)}
+          >
+            <svg
+              className="mr-3 h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+              />
+            </svg>
+            Productos
+          </NavLink>
+
+          <NavLink
             to="/clientes/nuevo"
             className={({ isActive }) =>
               `flex items-center rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
