@@ -355,16 +355,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    // Si es una actualización, redirigir a /productos
-    if (productId) {
-      return redirect("/productos");
-    }
-
-    // Si es una creación, devolver JSON
-    return json<ActionData>({
-      success: "Producto y sus imágenes guardados exitosamente",
-      productId: productResult.id,
-    });
+    // Redirigir a /productos en ambos casos (creación y actualización)
+    return redirect("/productos");
 
   } catch (error) {
     console.error("Error en la acción:", error);
