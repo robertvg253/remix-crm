@@ -1,6 +1,6 @@
 import { json, redirect, type LoaderFunctionArgs } from "@remix-run/node";
 import { useLoaderData, useActionData, useNavigation, useRevalidator, useFetcher, useNavigate, useSearchParams } from "@remix-run/react";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { getFilteredProducts } from "~/utils/productQueries.server";
 import RightSideDrawer from "~/components/RightSideDrawer";
 import ProductForm from "~/components/ProductForm";
@@ -72,6 +72,7 @@ export default function ProductosPage() {
   const [searchParams] = useSearchParams();
   const [showCreateProductDrawer, setShowCreateProductDrawer] = useState(false);
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const isProcessingSuccessRef = useRef(false);
 
   // Calcular el total de páginas
   const totalPages = Math.max(1, Math.ceil(totalProducts / limit));
@@ -87,54 +88,64 @@ export default function ProductosPage() {
   const handleCloseDrawer = useCallback(() => {
     console.log("[productos._index] 🧹 handleCloseDrawer: Iniciando reseteo completo de estados.");
     
-    // 1. Primero limpiamos los datos del fetcher para evitar desfases
-    editFetcher.data = undefined;
-    
-    // 2. Luego reseteamos los estados en orden
+    // Reseteamos los estados en orden
     setEditingProductId(null);
     setShowCreateProductDrawer(false);
     
     console.log("[productos._index] ✅ handleCloseDrawer: Estados reseteados.");
-  }, [editFetcher]);
+  }, []);
 
   // Función para iniciar la edición de un producto
   const handleStartEdit = useCallback((productId: string) => {
     console.log(`[productos._index] 🚀 handleStartEdit: Iniciando edición para ID ${productId}`);
     
-    // 1. Primero limpiamos cualquier estado anterior
-    editFetcher.data = undefined;
-    
-    // 2. Luego establecemos el nuevo ID y cerramos el modo creación
+    // Establecemos el nuevo ID y cerramos el modo creación
     setShowCreateProductDrawer(false);
     setEditingProductId(productId);
     
     console.log(`[productos._index] ✅ handleStartEdit: Estados actualizados para ID ${productId}`);
-  }, [editFetcher]);
+  }, []);
 
   // Efecto para cargar datos del producto al editar
   useEffect(() => {
     console.log(`[productos._index] 🔍 useEffect (editFetcher.load): Estado actual - editingProductId=${editingProductId}, editFetcher.state=${editFetcher.state}, editFetcher.data?.product?.id=${editFetcher.data?.product?.id}`);
 
-    // Solo cargar datos si tenemos un ID y no estamos ya cargando
     if (editingProductId && editFetcher.state === "idle") {
-      // Solo cargar si no tenemos datos o si los datos son de otro producto
       if (!editFetcher.data?.product || editFetcher.data.product.id !== editingProductId) {
         console.log(`[productos._index] 🚀 Disparando editFetcher.load para ID: ${editingProductId}`);
         editFetcher.load(`/productos/${editingProductId}`);
       } else {
-        console.log(`[productos._index] ℹ️ Datos ya cargados para ID ${editingProductId}`);
+        console.log(`[productos._index] ℹ️ Datos ya cargados para ID ${editingProductId}. No se necesita recargar.`);
       }
     }
   }, [editingProductId, editFetcher]);
 
   // Efecto para manejar el éxito de la operación
   useEffect(() => {
-    if (fetcher.state === "idle" && fetcher.data?.success) {
+    // Check if action was successful AND we haven't processed this specific success event yet
+    if (fetcher.state === "idle" && fetcher.data?.success && !isProcessingSuccessRef.current) {
       console.log("[productos._index] 🥳 Action exitosa detectada. Cerrando drawer y actualizando lista.");
+      
+      // Set flag to true to prevent re-execution for this success
+      isProcessingSuccessRef.current = true;
+      
+      // Perform side effects: close drawer and revalidate the list
       handleCloseDrawer();
       revalidator.revalidate();
+
+      // CRITICAL FIX: After processing the success,
+      // trigger a "noop" fetcher submission to clear its internal data state.
+      // This makes fetcher.data.success become false, stopping the useEffect loop.
+      const dummyFormData = new FormData();
+      fetcher.submit(dummyFormData, { method: "post", action: "/productos/nuevo" });
+
+    } else if (fetcher.state === "idle" && !fetcher.data?.success && isProcessingSuccessRef.current) {
+      // If fetcher state is idle, and the data no longer indicates success (e.g., after the dummy submit),
+      // and we previously processed a success, then reset the flag.
+      console.log("[productos._index] 🔄 Resetting isProcessingSuccessRef.current flag because fetcher.data no longer indicates success.");
+      isProcessingSuccessRef.current = false;
     }
-  }, [fetcher.state, fetcher.data, handleCloseDrawer, revalidator]);
+  }, [fetcher.state, fetcher.data, handleCloseDrawer, revalidator, fetcher]);
 
   // Memoizamos el título del drawer para evitar recálculos
   const drawerTitle = useMemo(() => {

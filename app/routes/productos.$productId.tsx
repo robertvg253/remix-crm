@@ -68,8 +68,9 @@ export const loader = async ({ params }: LoaderFunctionArgs) => {
     // Consultar las imágenes asociadas
     const { data: images, error: imagesError } = await supabase
       .from("images")
-      .select("id, url, uuid")
-      .eq("product_id", productId);
+      .select("id, url, uuid, order_index")
+      .eq("product_id", productId)
+      .order('order_index', { ascending: true });
 
     // Si hay error al cargar imágenes, devolvemos el producto sin imágenes
     if (imagesError) {

@@ -1,6 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionData } from "~/routes/productos.nuevo";
 import type { FetcherWithComponents } from "@remix-run/react";
+import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd';
+
+// Tipos para las imágenes
+type ExistingImage = {
+  id: string;
+  url: string;
+  uuid: string;
+  order_index?: number;
+};
+
+type NewImage = {
+  id: string;
+  url: string;
+  file: File;
+  order_index: number;
+};
+
+type OrderedImage = {
+  id: string;
+  url: string;
+  type: 'existing' | 'new';
+  data: ExistingImage | NewImage;
+  order_index: number;
+};
 
 interface ProductFormProps {
   onClose: () => void;
@@ -9,11 +33,7 @@ interface ProductFormProps {
     name: string;
     description?: string;
     price: number;
-    images?: Array<{
-      id: string;
-      url: string;
-      uuid: string;
-    }> | null;
+    images?: ExistingImage[] | null;
   };
   fetcher: FetcherWithComponents<ActionData>;
 }
@@ -21,29 +41,165 @@ interface ProductFormProps {
 export default function ProductForm({ onClose, defaultValues, fetcher }: ProductFormProps) {
   const isSubmitting = fetcher.state === "submitting";
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [images, setImages] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
-  const [existingImages, setExistingImages] = useState<Array<{ id: string; url: string; uuid: string }>>(
-    defaultValues?.images || []
-  );
-  const [currentImages, setCurrentImages] = useState<Array<{ id: string; url: string; uuid: string }>>(defaultValues?.images || []);
+  
+  // Estado para las imágenes ordenadas
+  const [orderedImages, setOrderedImages] = useState<OrderedImage[]>(() => {
+    // Ordenar las imágenes por order_index antes de mapearlas
+    const sortedImages = [...(defaultValues?.images || [])].sort((a, b) => {
+      // Si ambos tienen order_index, ordenar por ese valor
+      if (a.order_index !== undefined && b.order_index !== undefined) {
+        return a.order_index - b.order_index;
+      }
+      // Si solo uno tiene order_index, poner primero el que lo tiene
+      if (a.order_index !== undefined) return -1;
+      if (b.order_index !== undefined) return 1;
+      // Si ninguno tiene order_index, mantener el orden original
+      return 0;
+    });
 
-  // Efecto para actualizar las imágenes existentes cuando cambian los defaultValues
-  useEffect(() => {
-    setExistingImages(defaultValues?.images || []);
-  }, [defaultValues?.images]);
+    return sortedImages.map((img) => ({
+      id: img.id,
+      url: img.url,
+      type: 'existing' as const,
+      order_index: img.order_index || 0, // Usar el order_index existente
+      data: {
+        ...img,
+        order_index: img.order_index || 0
+      }
+    }));
+  });
 
-  // UseEffect para actualizar currentImages cuando defaultValues cambian (ej. al abrir el drawer para un nuevo producto)
-  // o al seleccionar un producto diferente en edición.
-  // La `key` en el ProductForm padre es el principal mecanismo de reinicio, pero esto asegura la sincronización.
+  // Función para generar IDs únicos para nuevas imágenes
+  const generateUniqueId = () => `new-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // Función para manejar la selección de nuevas imágenes
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files) return;
+
+    const newImages: OrderedImage[] = Array.from(files).map((file) => {
+      const id = generateUniqueId();
+      const url = URL.createObjectURL(file);
+      // No asignamos order_index aquí, se asignará en el reordenamiento
+      return {
+        id,
+        url,
+        type: 'new' as const,
+        order_index: 0, // Inicialmente 0, se actualizará en el reordenamiento
+        data: {
+          id,
+          url,
+          file,
+          order_index: 0
+        }
+      };
+    });
+
+    // Actualizar el estado y reordenar todas las imágenes
+    setOrderedImages(prev => {
+      const allImages = [...prev, ...newImages];
+      return allImages.map((img, index) => ({
+        ...img,
+        order_index: index + 1,
+        data: {
+          ...img.data,
+          order_index: index + 1
+        }
+      }));
+    });
+  };
+
+  // Función para reordenar imágenes
+  const reorder = (list: OrderedImage[], startIndex: number, endIndex: number) => {
+    const result = Array.from(list);
+    const [removed] = result.splice(startIndex, 1);
+    result.splice(endIndex, 0, removed);
+    
+    // Actualizar order_index para todas las imágenes
+    return result.map((img, index) => ({
+      ...img,
+      order_index: index + 1,
+      data: {
+        ...img.data,
+        order_index: index + 1
+      }
+    }));
+  };
+
+  // Función para manejar el fin del drag and drop
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+
+    const reordered = reorder(
+      orderedImages,
+      result.source.index,
+      result.destination.index
+    );
+
+    console.log('Imágenes reordenadas:', reordered.map(img => ({
+      id: img.id,
+      order_index: img.order_index,
+      type: img.type
+    })));
+
+    setOrderedImages(reordered);
+  };
+
+  // Función para eliminar una imagen
+  const handleRemoveImage = (imageId: string) => {
+    setOrderedImages(prev => {
+      const newImages = prev.filter(img => img.id !== imageId);
+      // Reordenar las imágenes restantes
+      return newImages.map((img, index) => ({
+        ...img,
+        order_index: index + 1,
+        data: {
+          ...img.data,
+          order_index: index + 1
+        }
+      }));
+    });
+  };
+
+  // Función para manejar el envío del formulario
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    
+    // Crear un nuevo FormData
+    const formData = new FormData(event.currentTarget);
+    
+    // Agregar los order_index actualizados
+    orderedImages.forEach((image, index) => {
+      formData.set(`images[${index}].order_index`, image.order_index.toString());
+      if (image.type === 'existing') {
+        formData.set(`images[${index}].id`, image.id);
+      }
+    });
+
+    // Debug: Mostrar los datos que se enviarán
+    console.log('Datos a enviar:', {
+      productId: formData.get('productId'),
+      images: orderedImages.map(img => ({
+        id: img.id,
+        order_index: img.order_index,
+        type: img.type
+      }))
+    });
+
+    // Enviar el formulario
+    event.currentTarget.submit();
+  };
+
+  // Limpiar URLs de objetos cuando el componente se desmonte
   useEffect(() => {
-    console.log("ProductForm: defaultValues changed. Re-initializing internal state.");
-    setCurrentImages(defaultValues?.images || []); // Reinicializa las imágenes mostradas
-    // También resetear el input de archivo para que no guarde el archivo del intento anterior
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  }, [defaultValues]); // Dependencia: defaultValues (observa cambios en todo el objeto defaultValues)
+    return () => {
+      orderedImages.forEach(img => {
+        if (img.type === 'new') {
+          URL.revokeObjectURL(img.url);
+        }
+      });
+    };
+  }, [orderedImages]);
 
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.success) {
@@ -64,14 +220,34 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
       action="/productos/nuevo"
       encType="multipart/form-data"
       className="space-y-6"
+      onSubmit={handleSubmit}
     >
       {defaultValues?.id && (
         <input type="hidden" name="productId" value={defaultValues.id} />
       )}
 
-      {fetcher.data?.errors?.form && (
-        <div className="rounded-md bg-red-50 p-4 text-sm text-red-700 dark:bg-red-900/50 dark:text-red-200">
-          {fetcher.data.errors.form}
+      {/* Agregar inputs ocultos para el order_index y ID de cada imagen */}
+      {orderedImages.map((image, index) => (
+        <div key={`image-data-${image.id}`}>
+          <input
+            type="hidden"
+            name={`images[${index}].order_index`}
+            value={image.order_index}
+          />
+          {image.type === 'existing' && (
+            <input
+              type="hidden"
+              name={`images[${index}].id`}
+              value={image.id}
+            />
+          )}
+        </div>
+      ))}
+
+      {/* Debug: Mostrar el estado actual de las imágenes */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="hidden">
+          <pre>{JSON.stringify(orderedImages, null, 2)}</pre>
         </div>
       )}
 
@@ -161,6 +337,7 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
           name="images"
           multiple
           accept="image/*"
+          onChange={handleFileSelect}
           className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:rounded-md file:border-0 file:bg-blue-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100 dark:text-gray-400 dark:file:bg-blue-900/50 dark:file:text-blue-300 dark:hover:file:bg-blue-900"
         />
         <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -172,26 +349,55 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
           </p>
         )}
 
-        {/* Mostrar imágenes existentes */}
-        {existingImages.length > 0 && (
+        {/* Área de Drag and Drop */}
+        {orderedImages.length > 0 && (
           <div className="mt-4">
             <h4 className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-              Imágenes Actuales
+              Imágenes ({orderedImages.length} en total)
             </h4>
-            <div className="grid grid-cols-4 gap-4">
-              {existingImages.map((image) => (
-                <div
-                  key={image.id}
-                  className="relative aspect-square overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700"
-                >
-                  <img
-                    src={image.url}
-                    alt="Imagen del producto"
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-              ))}
-            </div>
+            <DragDropContext onDragEnd={onDragEnd}>
+              <Droppable droppableId="image-list" direction="horizontal">
+                {(provided) => (
+                  <div
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    className="grid grid-cols-4 gap-4"
+                  >
+                    {orderedImages.map((image, index) => (
+                      <Draggable key={image.id} draggableId={image.id} index={index}>
+                        {(provided, snapshot) => (
+                          <div
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            {...provided.dragHandleProps}
+                            className={`relative aspect-square overflow-hidden rounded-lg border dark:border-gray-700
+                                     ${snapshot.isDragging ? 'border-blue-500 shadow-lg' : 'border-gray-200'}
+                                     ${image.type === 'new' ? 'border-dashed border-blue-400' : ''}`}
+                          >
+                            <img
+                              src={image.url}
+                              alt="Imagen del producto"
+                              className="h-full w-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveImage(image.id)}
+                              className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 text-xs"
+                              aria-label="Eliminar imagen"
+                            >
+                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"></path>
+                              </svg>
+                            </button>
+                          </div>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                  </div>
+                )}
+              </Droppable>
+            </DragDropContext>
           </div>
         )}
       </div>

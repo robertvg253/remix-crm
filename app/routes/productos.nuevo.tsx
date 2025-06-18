@@ -56,6 +56,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
     
+    // Check if this is a "noop" submission
+    const isNoOp = !formData.get("productId") && 
+                  !formData.get("name") && 
+                  !formData.getAll("images").some(file => file instanceof File && file.size > 0);
+
+    if (isNoOp) {
+      console.log("[productos.nuevo] Detected no-op submission. Returning success.");
+      return json<ActionData>({ success: "No operation performed" }, { status: 200 });
+    }
+    
     // Debug: Ver todos los campos recibidos
     console.log('FormData received:', [...formData.entries()].map(([key, value]) => {
       if (value instanceof File) {
@@ -70,6 +80,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const description = formData.get("description") as string;
     const price = formData.get("price") as string;
     const imageFiles = formData.getAll("images") as File[];
+    
+    // Obtener los order_index de las imágenes existentes
+    const imageOrderIndices = formData.getAll("images[].order_index").map(index => Number(index));
 
     // Debug: Verificar archivos de imagen
     console.log('Image Files detected:', imageFiles.length, imageFiles.map(file => ({
@@ -115,7 +128,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (productError) {
         console.error("Error al crear el producto:", productError);
-        throw new Error("Error al crear el producto en la base de datos");
+        return json<ActionData>({
+          errors: {
+            form: "Error al crear el producto en la base de datos. Por favor, intenta de nuevo."
+          }
+        }, { status: 500 });
       }
 
       console.log('Producto creado exitosamente:', newProduct);
@@ -135,7 +152,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (updateError) {
         console.error("Error al actualizar el producto:", updateError);
-        throw new Error("Error al actualizar el producto en la base de datos");
+        return json<ActionData>({
+          errors: {
+            form: "Error al actualizar el producto en la base de datos. Por favor, intenta de nuevo."
+          }
+        }, { status: 500 });
       }
 
       console.log('Producto actualizado exitosamente:', updatedProduct);
@@ -144,7 +165,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     // Procesar imágenes si existen
     if (imageFiles.length > 0) {
-      const imagePromises = imageFiles.map(async (file) => {
+      const imagePromises = imageFiles.map(async (file, index) => {
         try {
           // Validar tipo y tamaño de archivo
           if (!file.type.startsWith("image/")) {
@@ -195,12 +216,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             return null;
           }
 
-          // Registrar imagen en la tabla images
+          // Registrar imagen en la tabla images con order_index
           const { error: imageError } = await supabase.from("images").insert([
             {
               uuid: imageUuid,
               url: publicUrl,
               product_id: productResult.id,
+              order_index: imageOrderIndices[index] || index + 1, // Usar el order_index proporcionado o generar uno
             },
           ]);
 
@@ -232,12 +254,70 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
+    // Si es una actualización, actualizar el order_index de todas las imágenes existentes
+    if (productId) {
+      // Debug: Mostrar todos los datos recibidos
+      console.log('Datos recibidos en el servidor:', {
+        productId,
+        formData: [...formData.entries()].map(([key, value]) => {
+          if (value instanceof File) {
+            return [key, { name: value.name, type: value.type, size: value.size }];
+          }
+          return [key, value];
+        })
+      });
+
+      // Obtener todos los order_index y IDs de las imágenes del formulario
+      const imageUpdates = [];
+      let index = 0;
+      
+      while (true) {
+        const imageId = formData.get(`images[${index}].id`);
+        const orderIndex = formData.get(`images[${index}].order_index`);
+        
+        if (!imageId || !orderIndex) break;
+        
+        imageUpdates.push({
+          id: imageId.toString(),
+          order_index: parseInt(orderIndex.toString(), 10)
+        });
+        
+        index++;
+      }
+
+      console.log('Actualizando order_index de imágenes:', imageUpdates);
+
+      // Actualizar cada imagen con su nuevo order_index
+      const updatePromises = imageUpdates.map(update => {
+        console.log(`Actualizando imagen ${update.id} con order_index ${update.order_index}`);
+        return supabase
+          .from("images")
+          .update({ order_index: update.order_index })
+          .eq("id", update.id)
+          .eq("product_id", productId);
+      });
+
+      const results = await Promise.all(updatePromises);
+      const errors = results.filter(result => result.error);
+
+      if (errors.length > 0) {
+        console.error("Errores al actualizar order_index:", errors);
+      } else {
+        console.log('Order_index actualizado exitosamente para todas las imágenes');
+      }
+    }
+
+    // Si es una actualización, redirigir a /productos
+    if (productId) {
+      return redirect("/productos");
+    }
+
+    // Si es una creación, devolver JSON
     return json<ActionData>({
-      success: productId
-        ? "Producto actualizado exitosamente"
-        : "Producto y sus imágenes guardados exitosamente",
+      success: "Producto y sus imágenes guardados exitosamente",
       productId: productResult.id,
     });
+
   } catch (error) {
     console.error("Error en la acción:", error);
     return json<ActionData>(
