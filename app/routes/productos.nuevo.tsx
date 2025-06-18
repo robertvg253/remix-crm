@@ -254,18 +254,66 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    // Si es una actualización, actualizar el order_index de todas las imágenes existentes
+    // Si es una actualización, procesar las imágenes eliminadas
     if (productId) {
-      // Debug: Mostrar todos los datos recibidos
-      console.log('Datos recibidos en el servidor:', {
-        productId,
-        formData: [...formData.entries()].map(([key, value]) => {
-          if (value instanceof File) {
-            return [key, { name: value.name, type: value.type, size: value.size }];
+      // Obtener la lista de imágenes eliminadas
+      const deletedImagesStr = formData.get('deletedImages')?.toString();
+      if (deletedImagesStr) {
+        try {
+          const deletedImages = JSON.parse(deletedImagesStr) as string[];
+          console.log('Imágenes a eliminar:', deletedImages);
+
+          // Obtener las imágenes a eliminar para obtener sus UUIDs
+          const { data: imagesToDelete, error: fetchError } = await supabase
+            .from("images")
+            .select("id, uuid")
+            .in("id", deletedImages);
+
+          if (fetchError) {
+            console.error("Error al obtener imágenes a eliminar:", fetchError);
+          } else if (imagesToDelete) {
+            // Eliminar las imágenes de Storage
+            const deleteStoragePromises = imagesToDelete.map(async (image) => {
+              // Obtener la extensión del archivo de la URL
+              const { data: imageData } = await supabase
+                .from("images")
+                .select("url")
+                .eq("id", image.id)
+                .single();
+
+              if (imageData?.url) {
+                const urlParts = imageData.url.split('.');
+                const extension = urlParts[urlParts.length - 1];
+                const storagePath = `products/${productId}/${image.uuid}.${extension}`;
+
+                const { error: storageError } = await supabase.storage
+                  .from("product-images")
+                  .remove([storagePath]);
+
+                if (storageError) {
+                  console.error(`Error al eliminar imagen de storage: ${storagePath}`, storageError);
+                }
+              }
+            });
+
+            await Promise.all(deleteStoragePromises);
+
+            // Eliminar los registros de la base de datos
+            const { error: deleteError } = await supabase
+              .from("images")
+              .delete()
+              .in("id", deletedImages);
+
+            if (deleteError) {
+              console.error("Error al eliminar registros de imágenes:", deleteError);
+            } else {
+              console.log('Imágenes eliminadas exitosamente');
+            }
           }
-          return [key, value];
-        })
-      });
+        } catch (error) {
+          console.error("Error al procesar imágenes eliminadas:", error);
+        }
+      }
 
       // Obtener todos los order_index y IDs de las imágenes del formulario
       const imageUpdates = [];

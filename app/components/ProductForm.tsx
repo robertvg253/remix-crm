@@ -69,6 +69,9 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
     }));
   });
 
+  // Estado para trackear imágenes eliminadas
+  const [deletedImages, setDeletedImages] = useState<string[]>([]);
+
   // Función para generar IDs únicos para nuevas imágenes
   const generateUniqueId = () => `new-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -148,6 +151,13 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
   // Función para eliminar una imagen
   const handleRemoveImage = (imageId: string) => {
     setOrderedImages(prev => {
+      const imageToRemove = prev.find(img => img.id === imageId);
+      if (imageToRemove?.type === 'new') {
+        URL.revokeObjectURL(imageToRemove.url);
+      } else if (imageToRemove?.type === 'existing') {
+        // Agregar a la lista de imágenes eliminadas
+        setDeletedImages(prev => [...prev, imageId]);
+      }
       const newImages = prev.filter(img => img.id !== imageId);
       // Reordenar las imágenes restantes
       return newImages.map((img, index) => ({
@@ -176,6 +186,9 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
       }
     });
 
+    // Agregar la lista de imágenes eliminadas
+    formData.set('deletedImages', JSON.stringify(deletedImages));
+
     // Debug: Mostrar los datos que se enviarán
     console.log('Datos a enviar:', {
       productId: formData.get('productId'),
@@ -183,7 +196,8 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
         id: img.id,
         order_index: img.order_index,
         type: img.type
-      }))
+      })),
+      deletedImages
     });
 
     // Enviar el formulario
@@ -225,6 +239,9 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
       {defaultValues?.id && (
         <input type="hidden" name="productId" value={defaultValues.id} />
       )}
+
+      {/* Input oculto para las imágenes eliminadas */}
+      <input type="hidden" name="deletedImages" value={JSON.stringify(deletedImages)} />
 
       {/* Agregar inputs ocultos para el order_index y ID de cada imagen */}
       {orderedImages.map((image, index) => (
@@ -370,8 +387,10 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
                             ref={provided.innerRef}
                             {...provided.draggableProps}
                             {...provided.dragHandleProps}
-                            className={`relative aspect-square overflow-hidden rounded-lg border dark:border-gray-700
-                                     ${snapshot.isDragging ? 'border-blue-500 shadow-lg' : 'border-gray-200'}
+                            className={`relative aspect-square overflow-hidden rounded-lg border transition-all duration-200
+                                     ${snapshot.isDragging 
+                                       ? 'border-blue-500 shadow-lg opacity-100 cursor-grabbing scale-105 z-50' 
+                                       : 'border-gray-200 cursor-grab hover:border-blue-300 dark:border-gray-700'}
                                      ${image.type === 'new' ? 'border-dashed border-blue-400' : ''}`}
                           >
                             <img
@@ -382,7 +401,7 @@ export default function ProductForm({ onClose, defaultValues, fetcher }: Product
                             <button
                               type="button"
                               onClick={() => handleRemoveImage(image.id)}
-                              className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 text-xs"
+                              className="absolute top-1 right-1 bg-red-500 hover:bg-red-600 text-white rounded-full p-1 text-xs transition-colors duration-200"
                               aria-label="Eliminar imagen"
                             >
                               <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
